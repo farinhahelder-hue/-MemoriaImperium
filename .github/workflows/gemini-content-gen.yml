@@ -1,0 +1,209 @@
+name: Gemini AI Content Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Video topic (e.g., "Battle of Cannae")'
+        required: true
+        type: string
+      content_type:
+        description: 'What to generate'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - research
+          - outline
+          - script
+          - seo
+      target_length:
+        description: 'Target video length (minutes)'
+        required: false
+        default: '15'
+        type: string
+
+jobs:
+  generate-with-gemini:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Create project folder
+        id: project
+        run: |
+          TOPIC_SLUG=$(echo "${{ github.event.inputs.topic }}" | tr '[:upper:]' '[:lower:]' | tr '[:space:]' '-' | tr -cd '[:alnum:]-_')
+          DATE=$(date +%Y-%m-%d)
+          FOLDER_NAME="research/${DATE}_${TOPIC_SLUG}"
+          mkdir -p "$FOLDER_NAME"
+          echo "folder=$FOLDER_NAME" >> $GITHUB_OUTPUT
+          echo "slug=$TOPIC_SLUG" >> $GITHUB_OUTPUT
+
+      - name: Generate content with Gemini
+        id: gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 << 'PYTHON'
+          import os
+          import json
+          import requests
+          from datetime import datetime
+
+          api_key = os.environ.get('GEMINI_API_KEY')
+          topic = """${{ github.event.inputs.topic }}"""
+          content_type = """${{ github.event.inputs.content_type }}"""
+          target_length = """${{ github.event.inputs.target_length }}"""
+          folder = os.environ.get('FOLDER_NAME', 'research')
+          
+          prompts = {
+              "full": f"""You are a historian for "Memoria Imperium" YouTube channel covering military history and epic storytelling.
+
+Create content for a {target_length}-minute video about: {topic}
+
+Generate ALL of the following:
+
+# 1. RESEARCH NOTES
+- 5 hook-ready facts
+- 3 lesser-known details
+- Timeline of key events
+- Common misconceptions
+
+# 2. VIDEO OUTLINE
+- Dramatic hook (first 30 seconds)
+- 5-7 sections with timing
+- Key points per section
+- Climax moment
+
+# 3. FULL SCRIPT
+Format with [SPEAKER] for narration, [VISUAL: description] for B-roll. Target 150 words/minute.
+
+# 4. SEO METADATA
+- 5 title options (50-60 chars)
+- Description
+- 15 tags
+- 3 thumbnail ideas
+
+Output in clean markdown format.""",
+
+              "research": f"""Research deeply: {topic}
+
+Provide:
+1. 5 hook-ready facts
+2. 3 lesser-known details
+3. Timeline of key events
+4. Key figures
+5. Sources to cite
+
+Format as markdown.""",
+
+              "outline": f"""Create a video outline for: {topic}
+
+Target: {target_length}-minute video
+
+Include:
+- Hook (first 30 seconds)
+- 5-7 sections with timestamps
+- Key points (3-5 each)
+- Climax moment
+- CTA
+
+Format as markdown.""",
+
+              "script": f"""Write a {target_length}-minute video script about: {topic}
+
+Format:
+- [SPEAKER - timestamp] for narration
+- [VISUAL: description] for B-roll cues
+
+Include:
+- Strong hook (first 15 seconds)
+- Setup/context (first 2 minutes)
+- Main content (structured sections)
+- Climax
+- Resolution + CTA
+
+Output as markdown script.""",
+
+              "seo": f"""Generate YouTube SEO content for: {topic}
+
+Provide:
+1. 5 title options (50-60 characters)
+2. Description with hook
+3. 15-20 tags
+4. 3 thumbnail concepts
+
+Output as markdown.""",
+          }
+
+          prompt = prompts.get(content_type, prompts["full"])
+
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+          
+          payload = {
+              "contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"temperature": 0.8, "maxOutputTokens": 8192}
+          }
+
+          print(f"Calling Gemini API for: {content_type}")
+          
+          response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+          
+          if response.status_code == 200:
+              data = response.json()
+              content = data['candidates'][0]['content']['parts'][0]['text']
+              
+              filename_map = {
+                  "full": "gemini-generated-full.md",
+                  "research": "gemini-research.md",
+                  "outline": "gemini-outline.md",
+                  "script": "gemini-script.md",
+                  "seo": "gemini-seo-metadata.md",
+              }
+              
+              filename = filename_map.get(content_type, "gemini-output.md")
+              filepath = os.path.join(folder, filename)
+              
+              with open(filepath, 'w') as f:
+                  f.write(f"# Generated by Gemini AI\n")
+                  f.write(f"# Topic: {topic}\n")
+                  f.write(f"# Date: {datetime.now().isoformat()}\n")
+                  f.write(f"# Content Type: {content_type}\n")
+                  f.write(f"---\n\n")
+                  f.write(content)
+              
+              print(f"Saved to: {filepath}")
+          else:
+              print(f"API Error: {response.status_code}")
+              print(response.text)
+              exit(1)
+          PYTHON
+
+      - name: Commit generated content
+        run: |
+          cd research
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "GitHub Actions Bot"
+            git commit -m "🤖 Gemini AI: ${{ github.event.inputs.topic }}"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-content-${{ steps.project.outputs.slug }}
+          path: ${{ steps.project.outputs.folder }}/*.md
+          retention-days: 30

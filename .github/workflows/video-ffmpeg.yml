@@ -1,0 +1,87 @@
+name: Video Assembly Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: 'Project folder name'
+        required: true
+        type: string
+      operation:
+        description: 'Operation'
+        required: true
+        default: 'assemble'
+        type: choice
+        options:
+          - assemble
+          - concat
+          - compress
+
+jobs:
+  assemble-video:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.operation == 'assemble'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Check project structure
+        run: |
+          PROJECT_DIR="research/${{ github.event.inputs.project }}"
+          echo "📁 Project: $PROJECT_DIR"
+          find "$PROJECT_DIR" -type f 2>/dev/null || echo "No files found"
+
+  concat-videos:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.operation == 'concat'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Concatenate videos
+        run: |
+          PROJECT_DIR="research/${{ github.event.inputs.project }}"
+          ASSETS="$PROJECT_DIR/assets"
+          
+          if [ -d "$ASSETS" ]; then
+            echo "📹 Found assets in: $ASSETS"
+            ls -la "$ASSETS"/*.mp4 2>/dev/null || echo "No .mp4 files found"
+            
+            echo "Create assembly.txt listing your clips:"
+            echo "  file 'assets/intro.mp4'"
+            echo "  file 'assets/main.mp4'"
+            echo "  file 'assets/outro.mp4'"
+          else
+            echo "Create folder: research/${{ github.event.inputs.project }}/assets/"
+            echo "Add your video clips there"
+          fi
+
+  compress-video:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.operation == 'compress'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Compress video
+        run: |
+          PROJECT_DIR="research/${{ github.event.inputs.project }}"
+          INPUT=$(find "$PROJECT_DIR" -name "*.mp4" | head -1)
+          
+          if [ -n "$INPUT" ]; then
+            OUTPUT="${INPUT%.mp4}-compressed.mp4"
+            echo "🗜️ Compressing: $INPUT"
+            ffmpeg -y -i "$INPUT" -c:v libx264 -crf 28 -preset fast -c:a aac -b:a 96k "$OUTPUT"
+            echo "✅ Output: $OUTPUT"
+          else
+            echo "No video found in: $PROJECT_DIR"
+          fi
